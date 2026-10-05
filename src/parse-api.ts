@@ -30,8 +30,10 @@ export function parseRequestBody(body: string, path: string): ParsedRequest {
   }
 
   if (basePath === '/v1/messages') {
+    const messages = (parsed.messages || []).map((m: any) => ({ ...m }))
+    if (parsed.system !== undefined) messages.unshift({ role: 'system', content: parsed.system })
     return {
-      messages: (parsed.messages || []).map((m: any) => ({ ...m })),
+      messages,
       tools: parsed.tools || [],
       reasoningEffort: parsed.reasoning_effort,
     };

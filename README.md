@@ -33,6 +33,14 @@ Set via environment variables (or persisted from the UI):
 - `PROXY_PORT` (default: `8787`)
 - `WEB_PORT` (default: `4000`)
 
+## Request analysis
+
+Capture decodes `Content-Encoding` before storing the UTF-8 request body. Supported encodings are gzip, deflate, Brotli and zstd; zstd requires a Node runtime with `zstdDecompressSync`. The original request bytes and headers are forwarded unchanged. Headers describe the original wire encoding, not the decoded stored body. Decoding failures are reported as capture errors without stopping forwarding or recording an empty replacement body.
+
+For Anthropic `/v1/messages`, the hash grid includes the top-level `system` field as its first message row. String prompts and content-block arrays are preserved, including block metadata such as `cache_control`.
+
+Previously captured compressed bodies stored as lossy UTF-8 cannot be reconstructed by these changes.
+
 ## Database Schema
 
 ### requests
@@ -41,7 +49,7 @@ Set via environment variables (or persisted from the UI):
 - `method` - HTTP method
 - `path` - Request path
 - `headers` - JSON string
-- `body` - Full request body (JSON string)
+- `body` - Full decoded request body (UTF-8 text)
 - `cache_salt` - Extracted if present in body
 - `client_ip` - Client IP address
 

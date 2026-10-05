@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseRequestBody } from './parse-api.js';
+import { buildMessageHashGrid } from './hash-grid.js';
 
 describe('parseRequestBody', () => {
   it('parses chat completions format', () => {
@@ -72,9 +73,43 @@ describe('parseRequestBody', () => {
       max_tokens: 1024,
     });
     const result = parseRequestBody(body, '/v1/messages?beta=true');
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toEqual({ role: 'user', content: 'Hello from claude' });
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toEqual({ role: 'system', content: 'You are a helpful assistant.' });
+    expect(result.messages[1]).toEqual({ role: 'user', content: 'Hello from claude' });
     expect(result.tools).toEqual([{ name: 'test_tool' }]);
+  });
+
+  it('preserves Anthropic system blocks and cache metadata', () => {
+    const system = [
+      { type: 'text', text: 'Stable instructions', cache_control: { type: 'ephemeral', ttl: '1h' } },
+      { type: 'text', text: 'Additional instructions' },
+    ];
+    const result = parseRequestBody(JSON.stringify({ system, messages: [] }), '/v1/messages');
+    expect(result.messages).toEqual([{ role: 'system', content: system }]);
+  });
+
+  it('does not add a system row when the Anthropic system field is absent', () => {
+    const messages = [{ role: 'user', content: 'Hello' }];
+    const result = parseRequestBody(JSON.stringify({ messages }), '/v1/messages');
+    expect(result.messages).toEqual(messages);
+  });
+
+  it('shows Anthropic system-only changes in the grid without changing the user row', () => {
+    const completions = ['Instructions A', 'Instructions B'].map(system =>
+      parseRequestBody(JSON.stringify({ system, messages: [{ role: 'user', content: 'Same question' }] }), '/v1/messages'));
+    const { grid } = buildMessageHashGrid(completions);
+    expect(grid.rows).toBe(2);
+    expect(grid.cells[0][0]).not.toBe(grid.cells[0][1]);
+    expect(grid.cells[1][0]).toBe(grid.cells[1][1]);
+  });
+
+  it('shows changes to Anthropic system-block metadata in the grid', () => {
+    const completions = ['5m', '1h'].map(ttl => parseRequestBody(JSON.stringify({
+      system: [{ type: 'text', text: 'Same instructions', cache_control: { type: 'ephemeral', ttl } }],
+      messages: [],
+    }), '/v1/messages'));
+    const { grid } = buildMessageHashGrid(completions);
+    expect(grid.cells[0][0]).not.toBe(grid.cells[0][1]);
   });
 
   it('returns empty messages for unknown path', () => {

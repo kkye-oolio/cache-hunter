@@ -1,5 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse, Server, request as httpRequest, IncomingHttpHeaders } from 'http'
 import { EventEmitter } from 'events'
+import { decodeRequestBody } from './request-body.js'
 
 export function concatUtf8(chunks: readonly Buffer[]): { raw: Buffer; text: string } {
   const raw = Buffer.concat([...chunks])
@@ -134,23 +135,10 @@ export class ProxyEngine extends EventEmitter {
     req.on('data', (chunk) => { requestChunks.push(chunk) })
 
     req.on('end', () => {
-      const { raw: requestRaw, text: requestBody } = concatUtf8(requestChunks)
-      const cacheSalt = this.extractCacheSalt(requestBody)
-      const requestHeaders = JSON.stringify(req.headers)
-
-      const requestData: ProxyRequestData = {
-        id: requestId,
-        timestamp: startTime,
-        method: req.method || 'UNKNOWN',
-        path: req.url || '/',
-        headers: requestHeaders,
-        body: requestBody,
-        cache_salt: cacheSalt,
-        client_ip: clientIp,
-      }
+      const requestRaw = Buffer.concat(requestChunks)
 
       if (this._capturing) {
-        this.emit('request', { requestId, request: requestData })
+        this.captureRequest(req, requestRaw, { id: requestId, timestamp: startTime, client_ip: clientIp })
       }
 
       const targetPath = req.url || '/'
@@ -198,6 +186,25 @@ export class ProxyEngine extends EventEmitter {
       proxyReq.write(requestRaw)
       proxyReq.end()
     })
+  }
+
+  private captureRequest(req: IncomingMessage, raw: Buffer, metadata: Pick<ProxyRequestData, 'id' | 'timestamp' | 'client_ip'>): void {
+    let body: string
+    try {
+      body = decodeRequestBody(raw, req.headers['content-encoding']?.toString())
+    } catch (error) {
+      console.error(`[Capture] Request body decoding failed: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    const request: ProxyRequestData = {
+      ...metadata,
+      method: req.method || 'UNKNOWN',
+      path: req.url || '/',
+      headers: JSON.stringify(req.headers),
+      body,
+      cache_salt: this.extractCacheSalt(body),
+    }
+    this.emit('request', { requestId: request.id, request })
   }
 
   private extractCacheSalt(body: string): string | null {
