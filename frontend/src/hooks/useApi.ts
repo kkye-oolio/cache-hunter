@@ -44,6 +44,10 @@ export interface TreeData {
   _toolsHashes: (string | null)[];
   _threads?: ThreadInfo[];
   _columnThread?: number[];
+  _agentSessions?: { key: string; kind: 'responses' | 'claude' | 'unattributed'; id: string | null; parentId?: string; count: number }[];
+  _selectedAgent?: string | null;
+  _callIndices?: number[];
+  _callIds?: string[];
 }
 
 export type ThreadKind = 'primary' | 'subagent' | 'title';
@@ -69,10 +73,10 @@ export const api = {
   captureStop: () => request<{ capturing: boolean }>('/capture/stop', { method: 'POST' }),
 
   listSessions: () => request<{ sessions: SessionMeta[] }>('/sessions'),
-  getSessionGrid: (id: string) => request<TreeData>(`/sessions/${id}`),
+  getSessionGrid: (id: string, agent?: string) => request<TreeData>(`/sessions/${id}${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`),
   deleteSession: (id: string) => request<{ deleted: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
   renameSession: (id: string, name: string) =>
     request<SessionMeta>(`/sessions/${id}`, { method: 'PUT', body: JSON.stringify({ name }) }),
-  deleteSessionCall: (id: string, index: number) =>
-    request<{ deleted: boolean }>(`/sessions/${id}/calls/${index}`, { method: 'DELETE' }),
+  deleteSessionCall: (id: string, index: number, callId: string) =>
+    request<{ deleted: boolean }>(`/sessions/${id}/calls/${index}?callId=${encodeURIComponent(callId)}`, { method: 'DELETE' }),
 };

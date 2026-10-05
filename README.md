@@ -45,6 +45,22 @@ For Anthropic `/v1/messages`, the hash grid includes the top-level `system` fiel
 
 Previously captured compressed bodies stored as lossy UTF-8 cannot be reconstructed by these changes.
 
+## Agent-session views
+
+The sidebar lists capture windows used for storage and rotation. Inside a window, select one agent session to view its grid: Responses requests use the existing `prompt_cache_key`, while Claude Code requests use `session_id` from the JSON string in `metadata.user_id`. Claude parent IDs are retained when present. Requests without a usable identifier are labeled unattributed. No identification headers are injected and request bodies are not changed.
+
+## Capture retention
+
+Completed capture databases expire after 24 hours or when their total size exceeds 1 GiB, oldest first. Active windows rotate after one hour or 128 MiB. Maintenance runs after each persisted request and every minute; byte limits are enforced after a write completes. Rotation drains pending writes before closing a file, and never changes the upstream request. Deleting an active window opens a replacement automatically.
+
+Limits apply to managed capture databases, not old trial directories or operational log files.
+
+## Pi Codex routing
+
+`integrations/pi/codex-routing.ts` registers a Codex-only provider override using Pi's native API implementation. A global extension wrapper supplies `openAICodexResponsesApi()` from Pi's own `@earendil-works/pi-ai` runtime and calls `registerCodexRouting`. This avoids another installed SDK copy. The integration forces SSE, maps the local request path to `/v1/responses`, preserves native options and rejects endpoint bypass. Other providers remain direct.
+
+Existing Pi sessions require `/reload`; future sessions discover the global wrapper automatically. A deliberate `--no-extensions` launch disables this integration. A running proxy alone does not redirect clients. Prompt/tool bodies are retained unchanged; the managed launcher filters credential headers. Claude routing is separate from the dashboard's ability to parse Claude IDs.
+
 ## Database Schema
 
 ### requests

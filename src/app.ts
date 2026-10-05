@@ -2,12 +2,9 @@ import express, { Request, Response } from 'express'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { ProxyEngine } from './proxy-engine.js'
-import { AsyncLogger } from './logger.js'
+import { CaptureManager } from './capture-manager.js'
 import {
   listSessions,
-  createSession,
-  finalizeSession,
-  deleteSession,
   deleteSessionCall,
   getSessionHashGrid,
   renameSession,
@@ -20,18 +17,8 @@ const PROJECT_ROOT = join(__dirname, '..')
 const DATA_DIR = join(PROJECT_ROOT, 'data')
 
 export function createApp(engine: ProxyEngine, dataDir: string = DATA_DIR, broadcaster?: WSBroadcaster) {
-  let currentLogger: AsyncLogger | null = null
-  let currentSessionId: string | null = null
-
-  engine.on('request', async (evt) => {
-    if (currentLogger) {
-      currentLogger.logRequest(evt.request)
-    }
-    if (broadcaster) {
-      broadcaster.broadcast('request:received', { requestId: evt.requestId })
-      broadcaster.broadcast('session:updated', { sessionId: currentSessionId })
-    }
-  })
+  const captures = new CaptureManager(engine, dataDir, broadcaster)
+  engine.on('request', evt => captures.record(evt.request))
 
   engine.on('error', (err) => {
     console.error('[Engine]', err.message)
@@ -83,7 +70,7 @@ export function createApp(engine: ProxyEngine, dataDir: string = DATA_DIR, broad
 
   app.post('/api/proxy/stop', async (_req: Request, res: Response) => {
     try {
-      if (engine.capturing) await stopCapture()
+      if (engine.capturing) await captures.stop()
       await engine.stop()
       res.json({ running: false })
     } catch (err: any) {
@@ -96,31 +83,11 @@ export function createApp(engine: ProxyEngine, dataDir: string = DATA_DIR, broad
   })
 
   // Capture
-  async function startCapture(): Promise<any> {
-    const cfg = engine.getConfig()
-    const session = createSession(cfg.targetHost, cfg.targetPort, engine.activeModel)
-    currentSessionId = session.id
-    currentLogger = new AsyncLogger(join(dataDir, session.filename))
-    engine.startCapture()
-    if (broadcaster) broadcaster.broadcast('capture:start', { session })
-    return session
-  }
-
-  async function stopCapture(): Promise<void> {
-    if (currentLogger) { currentLogger.close(); currentLogger = null }
-    engine.stopCapture()
-    if (currentSessionId) {
-      await finalizeSession(currentSessionId)
-      if (broadcaster) broadcaster.broadcast('capture:stop', { sessionId: currentSessionId })
-      currentSessionId = null
-    }
-  }
-
   app.post('/api/capture/start', async (_req: Request, res: Response) => {
     if (!engine.running) { res.status(400).json({ error: 'Proxy must be running to capture' }); return }
     if (engine.capturing) { res.status(409).json({ error: 'Already capturing' }); return }
     try {
-      const session = await startCapture()
+      const session = await captures.start()
       res.json({ capturing: true, session })
     } catch (err: any) {
       res.status(500).json({ error: err.message })
@@ -130,7 +97,7 @@ export function createApp(engine: ProxyEngine, dataDir: string = DATA_DIR, broad
   app.post('/api/capture/stop', async (_req: Request, res: Response) => {
     if (!engine.capturing) { res.status(409).json({ error: 'Not capturing' }); return }
     try {
-      await stopCapture()
+      await captures.stop()
       res.json({ capturing: false })
     } catch (err: any) {
       res.status(500).json({ error: err.message })
@@ -144,7 +111,8 @@ export function createApp(engine: ProxyEngine, dataDir: string = DATA_DIR, broad
 
   app.get('/api/sessions/:id', async (req: Request, res: Response) => {
     try {
-      const grid = await getSessionHashGrid(req.params.id)
+      const selectedAgent = typeof req.query.agent === 'string' ? req.query.agent : undefined
+      const grid = await getSessionHashGrid(req.params.id, selectedAgent)
       if (!grid) { res.status(404).json({ error: 'Session not found' }); return }
       res.json(grid)
     } catch (err: any) {
@@ -152,9 +120,13 @@ export function createApp(engine: ProxyEngine, dataDir: string = DATA_DIR, broad
     }
   })
 
-  app.delete('/api/sessions/:id', (req: Request, res: Response) => {
-    deleteSession(req.params.id)
-    res.json({ deleted: true })
+  app.delete('/api/sessions/:id', async (req: Request, res: Response) => {
+    try {
+      await captures.remove(req.params.id)
+      res.json({ deleted: true })
+    } catch (err: any) {
+      res.status(500).json({ error: err.message })
+    }
   })
 
   app.put('/api/sessions/:id', (req: Request, res: Response) => {
@@ -178,7 +150,8 @@ export function createApp(engine: ProxyEngine, dataDir: string = DATA_DIR, broad
         res.status(400).json({ error: 'Invalid call index' })
         return
       }
-      const ok = await deleteSessionCall(req.params.id, index)
+      const callId = typeof req.query.callId === 'string' ? req.query.callId : undefined
+      const ok = await deleteSessionCall(req.params.id, index, callId)
       if (!ok) {
         res.status(404).json({ error: 'Call not found' })
         return

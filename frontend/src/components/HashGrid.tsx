@@ -7,6 +7,7 @@ import './HashGrid.css';
 
 function gridDataEqual(a: TreeData, b: TreeData): boolean {
   if (a === b) return true
+  if (JSON.stringify([a._selectedAgent, a._callIndices, a._callIds]) !== JSON.stringify([b._selectedAgent, b._callIndices, b._callIds])) return false
   if (a.lines.length !== b.lines.length) return false
   for (let i = 0; i < a.lines.length; i++) {
     if (a.lines[i].length !== b.lines[i].length) return false

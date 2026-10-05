@@ -6,85 +6,62 @@ import type { ProxyRequestData } from './proxy-engine.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-interface RequestRecord extends ProxyRequestData {}
-
 export class AsyncLogger {
-  private queue: RequestRecord[] = []
-  private flushing = false
-  private flushInterval: NodeJS.Timeout
+  private queue: ProxyRequestData[] = []
+  private activeFlush: Promise<void> | null = null
   private dbPath: string
   private sqlJsReady: Promise<any>
 
   constructor(dbPath: string) {
     this.dbPath = dbPath
     this.sqlJsReady = initSqlJs()
-
-    this.flushInterval = setInterval(() => {
-      this.flush()
-    }, 100)
   }
 
-  logRequest(request: RequestRecord): void {
+  logRequest(request: ProxyRequestData): void {
     this.queue.push(request)
     process.stdout.write('.')
-    this.flush()
   }
 
   async flush(): Promise<void> {
-    if (this.flushing || this.queue.length === 0) return
-
-    this.flushing = true
+    while (this.activeFlush) await this.activeFlush
+    if (this.queue.length === 0) return
     const entries = this.queue
     this.queue = []
-
+    this.activeFlush = this.writeBatch(entries)
     try {
-      const SQL = await this.sqlJsReady
+      await this.activeFlush
+    } catch (error) {
+      this.queue.unshift(...entries)
+      throw error
+    } finally {
+      this.activeFlush = null
+    }
+    if (this.queue.length > 0) await this.flush()
+  }
 
-      let db: any
-      if (existsSync(this.dbPath)) {
-        const data = readFileSync(this.dbPath)
-        db = new SQL.Database(data)
-      } else {
-        db = new SQL.Database()
-        const schemaPath = join(__dirname, 'schema.sql')
-        const schema = readFileSync(schemaPath, 'utf-8')
-        db.run(schema)
-      }
-
+  private async writeBatch(entries: ProxyRequestData[]): Promise<void> {
+    const SQL = await this.sqlJsReady
+    const db = existsSync(this.dbPath)
+      ? new SQL.Database(readFileSync(this.dbPath))
+      : new SQL.Database()
+    try {
+      if (!existsSync(this.dbPath)) db.run(readFileSync(join(__dirname, 'schema.sql'), 'utf8'))
       db.run('BEGIN TRANSACTION')
-
       for (const entry of entries) {
         db.run(
           `INSERT INTO requests (id, timestamp, method, path, headers, body, cache_salt, client_ip)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            entry.id,
-            entry.timestamp,
-            entry.method,
-            entry.path,
-            entry.headers,
-            entry.body,
-            entry.cache_salt,
-            entry.client_ip,
-          ]
+          [entry.id, entry.timestamp, entry.method, entry.path, entry.headers, entry.body, entry.cache_salt, entry.client_ip],
         )
       }
-
       db.run('COMMIT')
-
-      const buf = Buffer.from(db.export())
-      writeFileSync(this.dbPath, buf)
-      db.close()
-    } catch (error) {
-      console.error('[Logger] Error flushing to database:', error)
-      this.queue.unshift(...entries)
+      writeFileSync(this.dbPath, Buffer.from(db.export()))
     } finally {
-      this.flushing = false
+      db.close()
     }
   }
 
-  close(): void {
-    clearInterval(this.flushInterval)
-    this.flush()
+  async close(): Promise<void> {
+    await this.flush()
   }
 }

@@ -2,6 +2,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from '
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import initSqlJs, { Database } from 'sql.js';
+import { randomUUID } from 'node:crypto';
+import { agentIdentity, selectAgentCalls, type AgentIdentity } from './agent-identity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -65,7 +67,7 @@ export function getActiveSession(): SessionMeta | null {
 
 export function listSessions(): SessionMeta[] {
   const manifest = readManifest();
-  return manifest.sessions.sort((a, b) => b.created_at - a.created_at);
+  return manifest.sessions.reverse().sort((a, b) => b.created_at - a.created_at);
 }
 
 export function createSession(
@@ -75,7 +77,7 @@ export function createSession(
   id?: string
 ): SessionMeta {
   const now = Date.now();
-  const sid = id || new Date(now).toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+  const sid = id || `${new Date(now).toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}-${randomUUID()}`;
   const filename = `${sid}.db`;
 
   const session: SessionMeta = {
@@ -147,9 +149,11 @@ async function readSessionCompletions(
   tools: any[];
   path: string;
   reasoningEffort?: string;
+  agent: AgentIdentity;
+  callId: string;
 }>> {
   const query = `
-    SELECT body, path
+    SELECT body, path, id
     FROM requests
     WHERE path IN ('/v1/chat/completions', '/v1/responses') OR path LIKE '/v1/messages%'
     ORDER BY timestamp
@@ -167,6 +171,8 @@ async function readSessionCompletions(
       tools: parsed.tools,
       path,
       reasoningEffort: parsed.reasoningEffort,
+      agent: agentIdentity(reqBody, path),
+      callId: row[2] as string,
     };
   });
 }
@@ -194,7 +200,7 @@ export function getSessionDbPath(id: string): string | null {
   return join(DATA_DIR, session.filename);
 }
 
-export async function deleteSessionCall(id: string, callIndex: number): Promise<boolean> {
+export async function deleteSessionCall(id: string, callIndex: number, callId?: string): Promise<boolean> {
   const manifest = readManifest()
   const session = manifest.sessions.find(s => s.id === id)
   if (!session) return false
@@ -212,12 +218,12 @@ export async function deleteSessionCall(id: string, callIndex: number): Promise<
     ORDER BY timestamp
   `)
 
-  if (idsResult.length === 0 || idsResult[0].values.length <= callIndex) {
+  const rows = idsResult[0]?.values ?? []
+  const requestId = callId ? rows.find(row => row[0] === callId)?.[0] : rows[callIndex]?.[0]
+  if (typeof requestId !== 'string') {
     db.close()
     return false
   }
-
-  const requestId = idsResult[0].values[callIndex][0] as string
 
   db.run('DELETE FROM requests WHERE id = ?', [requestId])
 
@@ -282,7 +288,7 @@ export async function finalizeStaleSessions(): Promise<number> {
   return staleIds.length
 }
 
-export async function getSessionHashGrid(id: string): Promise<any> {
+export async function getSessionHashGrid(id: string, selectedAgent?: string): Promise<any> {
   const dbPath = getSessionDbPath(id);
   if (!dbPath) return null;
 
@@ -298,11 +304,16 @@ export async function getSessionHashGrid(id: string): Promise<any> {
   const { buildTreeData } = await import('./hash-grid.js');
   const { analyzeThreads } = await import('./thread-analyzer.js');
 
-  const analysis = analyzeThreads(completions);
-  const tree = buildTreeData(completions, true);
+  const selection = selectAgentCalls(completions, selectedAgent);
+  const analysis = analyzeThreads(selection.calls);
+  const tree = buildTreeData(selection.calls, true);
   return {
     ...tree,
     _threads: analysis.threads,
     _columnThread: analysis.columnThread,
+    _agentSessions: selection.groups,
+    _selectedAgent: selection.key,
+    _callIndices: selection.indices,
+    _callIds: selection.calls.map(call => call.callId),
   };
 }

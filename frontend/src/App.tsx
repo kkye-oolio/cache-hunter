@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { api, type ProxyStatus, type Config, type SessionMeta, type TreeData } from './hooks/useApi';
+import { api, type ProxyStatus, type Config, type SessionMeta } from './hooks/useApi';
+import { useAgentGrid } from './hooks/useAgentGrid';
+import { AgentSessionPicker } from './components/AgentSessionPicker';
+import { callAddress } from './components/callAddress';
 import { HashGrid } from './components/HashGrid';
 import { useWebSocket } from './hooks/useWebSocket';
 import './styles/app.css';
@@ -12,13 +15,13 @@ export default function App() {
   const [status, setStatus] = useState<ProxyStatus>({ running: false, capturing: false, activeModel: null });
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [gridData, setGridData] = useState<TreeData | null>(null);
-  const [gridLoading, setGridLoading] = useState(false);
+  const { gridData, gridLoading, loadGrid, resetAgent, selectAgent, clearGrid } = useAgentGrid();
   const [autoScroll, setAutoScroll] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState('');
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
 
   const showError = useCallback((msg: string) => {
     setError(msg);
@@ -46,18 +49,6 @@ export default function App() {
     const active = sessions.find(s => s.status === 'active');
     return active?.id || null;
   }, [sessions]);
-
-  const loadGrid = useCallback(async (id: string, incremental = false) => {
-    if (!incremental) setGridLoading(true)
-    try {
-      const data = await api.getSessionGrid(id)
-      setGridData(data)
-    } catch {
-      if (!incremental) setGridData(null)
-    } finally {
-      if (!incremental) setGridLoading(false)
-    }
-  }, [])
 
   const activeSessionId = getActiveSessionId();
 
@@ -97,7 +88,7 @@ export default function App() {
     try {
       await api.proxyStop();
       setSelectedSessionId(null);
-      setGridData(null);
+      clearGrid();
       await pollStatus();
     } catch (err: any) {
       showError(err.message || 'Failed to stop proxy');
@@ -128,6 +119,7 @@ export default function App() {
   };
 
   const handleSelectSession = async (id: string) => {
+    resetAgent();
     setSelectedSessionId(id);
     await loadGrid(id);
   };
@@ -138,7 +130,7 @@ export default function App() {
       await api.deleteSession(id);
       if (selectedSessionId === id) {
         setSelectedSessionId(null);
-        setGridData(null);
+        clearGrid();
       }
       await pollStatus();
     } catch (err: any) {
@@ -260,7 +252,7 @@ export default function App() {
           </div>
 
           <div className="sidebar-section sessions-section">
-            <div className="section-title">Sessions</div>
+            <div className="section-title">Capture windows</div>
             <div className="session-list">
               {sessions.map(s => (
                 <div
@@ -305,7 +297,7 @@ export default function App() {
                 </div>
               ))}
               {sessions.length === 0 && (
-                <div className="empty-state">No sessions yet</div>
+                <div className="empty-state">No capture windows yet</div>
               )}
             </div>
           </div>
@@ -314,22 +306,27 @@ export default function App() {
         <main className="content">
           {gridLoading && <div className="loading">Loading...</div>}
           {!gridLoading && gridData && selectedSessionId && (
+            <>
+            <AgentSessionPicker data={gridData} onChange={agent => selectAgent(selectedSessionId, agent)} />
             <HashGrid
+              key={`${selectedSessionId}:${gridData._selectedAgent ?? ''}`}
               data={gridData}
               autoScroll={autoScroll}
               onDeleteColumn={async (colIndex) => {
                 try {
-                  await api.deleteSessionCall(selectedSessionId, colIndex)
+                  const address = callAddress(gridData, colIndex)
+                  await api.deleteSessionCall(selectedSessionId, address.index, address.callId)
                   loadGrid(selectedSessionId)
                 } catch (err: any) {
                   showError(err.message || 'Failed to delete call')
                 }
               }}
             />
+            </>
           )}
           {!gridLoading && !gridData && (
             <div className="empty-state centered">
-              <div className="empty-title">Select a session to view</div>
+              <div className="empty-title">Select a capture window to view</div>
               <div className="empty-sub">Or start capturing to see live traffic</div>
             </div>
           )}
