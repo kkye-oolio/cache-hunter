@@ -32,6 +32,10 @@ Set via environment variables (or persisted from the UI):
 - `TARGET_PORT` (default: `8000`)
 - `PROXY_PORT` (default: `8787`)
 - `WEB_PORT` (default: `4000`)
+- `CACHE_HUNTER_DATA_DIR` (default: `data/` in the checkout)
+- `CACHE_HUNTER_AUTO_CAPTURE=1` starts capture after proxy startup and the session sweep; startup failures exit nonzero for a service manager to restart
+
+The dashboard and capture listener bind to `127.0.0.1`.
 
 ## Request analysis
 

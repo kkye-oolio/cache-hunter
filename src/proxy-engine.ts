@@ -68,7 +68,7 @@ export class ProxyEngine extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => this.handleRequest(req, res))
-      this.server.listen(this.config.proxyPort, () => {
+      this.server.listen(this.config.proxyPort, '127.0.0.1', () => {
         const addr = this.server!.address()
         if (addr && typeof addr === 'object') {
           this.config.proxyPort = addr.port

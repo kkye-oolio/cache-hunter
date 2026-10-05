@@ -10,7 +10,7 @@ import { loadProxyConfig } from './config-store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
-const DATA_DIR = join(PROJECT_ROOT, 'data');
+const DATA_DIR = process.env.CACHE_HUNTER_DATA_DIR || join(PROJECT_ROOT, 'data');
 
 const WEB_PORT = parseInt(process.env.WEB_PORT || '4000', 10);
 const PROXY_PORT_ENV = parseInt(process.env.PROXY_PORT || '8787', 10);
@@ -44,13 +44,13 @@ webApp.get('*', (_req: any, res: any) => {
 
 server.on('request', webApp);
 
-server.listen(WEB_PORT, () => {
+server.listen(WEB_PORT, '127.0.0.1', () => {
   console.log(`Cache Hunter Web App running on http://localhost:${WEB_PORT}`);
   console.log(`Proxy port: ${persisted.proxyPort}`);
   console.log(`Default target: ${persisted.targetHost}:${persisted.targetPort}`);
   console.log(`Data directory: ${DATA_DIR}`);
 
-  finalizeStaleSessions()
+  const sessionSweep = finalizeStaleSessions()
     .then((count) => {
       if (count > 0) console.log(`Finalized ${count} stale session(s) left from a previous run`);
       return backfillSessionTitles()
@@ -62,8 +62,16 @@ server.listen(WEB_PORT, () => {
       console.error('Startup session sweep failed:', err.message);
     });
 
-  engine.start().catch((err: Error) => {
+  engine.start().then(async () => {
+    await sessionSweep;
+    if (process.env.CACHE_HUNTER_AUTO_CAPTURE === '1') {
+      const response = await fetch(`http://127.0.0.1:${WEB_PORT}/api/capture/start`, { method: 'POST' });
+      if (!response.ok) throw new Error(`Automatic capture startup failed: HTTP ${response.status}`);
+      console.log('Automatic capture started');
+    }
+  }).catch((err: Error) => {
     console.error(`Failed to start proxy: ${err.message}`);
+    if (process.env.CACHE_HUNTER_AUTO_CAPTURE === '1') process.exit(1);
   });
 });
 
